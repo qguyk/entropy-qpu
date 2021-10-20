@@ -394,6 +394,41 @@ def test_add_set_confidence_interval(testdb):
         assert db.get("q_new", "p_new").confidence_interval.error == error * 2
 
 
+def test_add_get_by_group(testdb):
+    element_name = "q_new"
+    with _QpuDatabaseConnectionBase(testdb) as db:
+        db.add_element(element_name)
+        db.add_attribute(
+            element_name,
+            "p_new",
+            "something",
+            new_confidence_interval=ConfidenceInterval(1.2),
+            tags=["best"],
+        )
+        db.commit()
+
+    with _QpuDatabaseConnectionBase(testdb) as db:
+        assert db.get(element_name, "p_new").value == "something"
+        got_attr = db.get_by_group("best")
+        assert len(got_attr) == 1
+        assert element_name in got_attr
+        assert len(got_attr[element_name]) == 1
+        assert got_attr[element_name][0].value == "something"
+
+    # with _QpuDatabaseConnectionBase(testdb) as db:
+    #     db.set(
+    #         element_name,
+    #         "p_new",
+    #         "something1",
+    #         new_confidence_interval=ConfidenceInterval(error * 2),
+    #     )
+    #     db.commit()
+    #
+    # with _QpuDatabaseConnectionBase(testdb) as db:
+    #     assert db.get(element_name, "p_new").value == "something1"
+    #     assert db.get(element_name, "p_new").confidence_interval.error == error * 2
+
+
 def test_add_and_remove_elements_persistence(testdb):
     with _QpuDatabaseConnectionBase(testdb) as db:
         db.add_element("q_new")

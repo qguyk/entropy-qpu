@@ -1,10 +1,10 @@
 import json
 import os
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import Any, Type, Optional, Dict
+from typing import Any, Type, Optional, Dict, List
 
 import ZODB
 import ZODB.FileStorage
@@ -45,6 +45,7 @@ class QpuParameter(Persistent):
     last_updated: datetime = None
     cal_state: CalState = CalState.UNCAL
     confidence_interval: ConfidenceInterval = ConfidenceInterval(-1)
+    tags: List[str] = field(default_factory=lambda: [])
 
     def __post_init__(self):
         if self.last_updated is None:
@@ -59,6 +60,7 @@ class QpuParameter(Persistent):
                 f"last updated: {self.last_updated.strftime('%m/%d/%Y %H:%M:%S')}, "
                 f"calibration state: {self.cal_state}), "
                 f"confidence_interval: {self.confidence_interval})"
+                f"tags: {self.tags})"
             )
 
 
@@ -72,6 +74,7 @@ class FrozenQpuParameter:
     last_updated: datetime = None
     cal_state: CalState = CalState.UNCAL
     confidence_interval: ConfidenceInterval = ConfidenceInterval(-1)
+    tags: List[str] = field(default_factory=lambda: [])
 
     def __repr__(self):
         if self.value is None:
@@ -82,6 +85,7 @@ class FrozenQpuParameter:
                 f"last updated: {self.last_updated.strftime('%m/%d/%Y %H:%M:%S')}, "
                 f"calibration state: {self.cal_state}), "
                 f"confidence_interval: {self.confidence_interval})"
+                f"tags: {self.tags})"
             )
 
 
@@ -268,6 +272,7 @@ class _QpuDatabaseConnectionBase(Resource):
         value: Any,
         new_cal_state: Optional[CalState] = None,
         new_confidence_interval: Optional[ConfidenceInterval] = None,
+        tags: Optional[List[str]] = None,
     ) -> None:
         """
         A generic function for modifying values of element attributes.
@@ -281,13 +286,12 @@ class _QpuDatabaseConnectionBase(Resource):
         :param value: The value to modify
         :param new_cal_state: (optional) new calibration state specification
         :param new_confidence_interval: (optional) a ConfidenceInterval object which holds the error in this parameter
+        :param tags: (optional) a list of string tags for this attribute
         """
         root = self._con.root()
 
         if element not in root["elements"]:
-            raise AttributeError(
-                f"element {element} does not exist for element {element}"
-            )
+            raise AttributeError(f"element {element} does not exist")
         if attribute not in root["elements"][element]:
             raise AttributeError(
                 f"attribute {attribute} does not exist for element {element}"
@@ -301,6 +305,7 @@ class _QpuDatabaseConnectionBase(Resource):
         root["elements"][element][attribute].value = value
         root["elements"][element][attribute].last_updated = datetime.now()
         root["elements"][element][attribute].cal_state = new_cal_state
+        root["elements"][element][attribute].tags = tags
         root["elements"][element][
             attribute
         ].confidence_interval = new_confidence_interval
@@ -312,6 +317,7 @@ class _QpuDatabaseConnectionBase(Resource):
         value: Any = None,
         new_cal_state: Optional[CalState] = None,
         new_confidence_interval: Optional[ConfidenceInterval] = None,
+        tags: Optional[List[str]] = None,
     ) -> None:
         """
         Adds an attribute to an existing element.
@@ -320,15 +326,14 @@ class _QpuDatabaseConnectionBase(Resource):
         :param element: the name of the element to add
         :param attribute: the name of the new atrribute
         :param value: an optional value for the new attribute
-        :param new_cal_state: an optional new cal state
+        :param new_cal_state: (optional) calibration state
         :param new_confidence_interval: (optional) a ConfidenceInterval object which holds the error in this parameter
+        :param tags: (optional) a list of string tags for this attribute
         """
         root = self._con.root()
 
         if element not in root["elements"]:
-            raise AttributeError(
-                f"element {element} does not exist for element {element}"
-            )
+            raise AttributeError(f"element {element} does not exist")
         if attribute in root["elements"][element]:
             raise AttributeError(
                 f"attribute {attribute} already exists for element {element}"
@@ -341,6 +346,8 @@ class _QpuDatabaseConnectionBase(Resource):
                 root["elements"][element][
                     attribute
                 ].confidence_interval = new_confidence_interval
+            if tags is not None:
+                root["elements"][element][attribute].tags = tags
             root["elements"]._p_changed = True
 
     def remove_attribute(self, element: str, attribute: str) -> None:
@@ -354,9 +361,7 @@ class _QpuDatabaseConnectionBase(Resource):
         root = self._con.root()
 
         if element not in root["elements"]:
-            raise AttributeError(
-                f"element {element} does not exist for element {element}"
-            )
+            raise AttributeError(f"element {element} does not exist")
         if attribute not in root["elements"][element]:
             raise AttributeError(
                 f"attribute {attribute} does not exist for element {element}"
@@ -388,19 +393,66 @@ class _QpuDatabaseConnectionBase(Resource):
         """
         root = self._con.root()
         if element not in root["elements"]:
-            raise AttributeError(
-                f"element {element} does not exist for element {element}"
-            )
+            raise AttributeError(f"element {element} does not exist")
         if attribute not in root["elements"][element]:
             raise AttributeError(
                 f"attribute {attribute} does not exist for element {element}"
             )
+        val = root["elements"][element][attribute]
         return FrozenQpuParameter(
-            deepcopy(root["elements"][element][attribute].value),
-            deepcopy(root["elements"][element][attribute].last_updated),
-            deepcopy(root["elements"][element][attribute].cal_state),
-            deepcopy(root["elements"][element][attribute].confidence_interval),
+            deepcopy(val.value),
+            deepcopy(val.last_updated),
+            deepcopy(val.cal_state),
+            deepcopy(val.confidence_interval),
+            deepcopy(val.tags),
         )
+
+    def get_by_group(
+        self, group: str, element: Optional[str] = None, attribute: Optional[str] = None
+    ):
+        """
+        Get all attributes that has the given tag
+        :param group: tag name to look for in attribute
+        :param element: optional filter to get all by element
+        :param attribute: optional filter to get all by attribute name (can be used
+            with or without element filter)
+        :return: a dictionary of relevant attributes, separated by elements
+        """
+        root = self._con.root()
+        if element and element not in root["elements"]:
+            raise AttributeError(f"element {element} does not exist")
+        elif element:
+            elements = {element: root["elements"][element]}
+        else:
+            elements = root["elements"]
+
+        group_attributes = {}
+        for element_name in elements:
+            if attribute and attribute not in elements[element]:
+                raise AttributeError(
+                    f"attribute {attribute} does not exist for element {element}"
+                )
+            elif attribute:
+                attributes = {attribute: elements[element_name][attribute]}
+            else:
+                attributes = elements[element_name]
+
+            for attr_name in attributes:
+                attr = attributes[attr_name]
+                if group in attr.tags:
+                    if element_name not in group_attributes:
+                        group_attributes[element_name] = []
+                    group_attributes[element_name].append(
+                        FrozenQpuParameter(
+                            deepcopy(attr.value),
+                            deepcopy(attr.last_updated),
+                            deepcopy(attr.cal_state),
+                            deepcopy(attr.confidence_interval),
+                            deepcopy(attr.tags),
+                        )
+                    )
+
+        return group_attributes
 
     def commit(self, message: Optional[str] = None) -> None:
         """
